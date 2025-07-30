@@ -6,9 +6,7 @@ const { generateGeminiResponse } = require("../utils/geminiClient");
 
 // Create message and get response from Gemini
 router.post("/:chatid", async (req, res) => {
-  const { chatId, sender, text } = req.body;
-  const sheetData = req.body.sheetData;
-
+  const { chatId, sender, text, sheetData } = req.body;
 
   try {
     // Save user message
@@ -26,17 +24,18 @@ router.post("/:chatid", async (req, res) => {
       .limit(5)
       .lean();
 
+    // Format message history
     const formattedHistory = recentMessages
       .reverse()
-      .map((msg) => ({
-        role: msg.sender === "user" ? "user" : "model",
-        content: msg.text,
-      }));
+      .map((msg) => {
+        if (msg.type === "user") {
+          return { role: "user", content: msg.text };
+        } else {
+          return { role: "model", content: msg.answer || "" };
+        }
+      });
 
-    // Add current user message
-    formattedHistory.push({ role: "user", content: text });
-
-    // Attach sheetData to final prompt if present
+    // Format sheet data
     let sheetDataString = "undefined";
     if (sheetData && typeof sheetData === "object") {
       try {
@@ -44,32 +43,57 @@ router.post("/:chatid", async (req, res) => {
       } catch (err) {
         console.warn("⚠️ Failed to stringify sheetData:", err.message);
       }
-    } else {
-      console.warn("⚠️ sheetData is missing or invalid");
     }
 
+    // Add current message with context
     formattedHistory.push({
       role: "user",
       content: `${text}\n\nHere is some related data:\n${sheetDataString}`,
     });
 
+    // === Call Gemini ===
+    console.log("📤 Sending to Gemini:", formattedHistory);
+    const { raw } = await generateGeminiResponse(formattedHistory);
+    console.log("📥 Raw Gemini Response:", JSON.stringify(raw, null, 2));
 
-    const geminiReply = await generateGeminiResponse(formattedHistory);
+    // === Extract Thought & Answer ===
+    const parts = raw?.candidates?.[0]?.content?.parts || [];
 
+    let thought = "";
+    let answer = "";
+
+    for (const part of parts) {
+      if (part.thought) {
+        thought += part.text?.trim() + "\n\n";
+      } else {
+        answer += part.text?.trim() + "\n\n";
+      }
+    }
+
+    thought = thought.trim();
+    answer = answer.trim();
+
+    console.log("💭 Thought:", thought);
+    console.log("💬 Answer:", answer);
+
+    // Save bot message
     const botMessage = new Message({
       chatId,
       sender: "assistant",
-      text: geminiReply,
       type: "bot",
+      thought,
+      answer,
     });
     await botMessage.save();
 
+    // Final response
     res.status(200).json([userMessage, botMessage]);
   } catch (error) {
     console.error("❌ Message handling failed:", error.message);
     res.status(500).json({ error: "Failed to send message" });
   }
 });
+
 
 // Get all messages
 router.get("/:chatId", async (req, res) => {

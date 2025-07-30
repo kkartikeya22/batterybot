@@ -1,6 +1,5 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Total number of keys
 const TOTAL_KEYS = 120;
 let currentKeyIndex = 1;
 
@@ -11,12 +10,12 @@ function getApiKey(index) {
 function getModel(apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
   return genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     systemInstruction: {
       role: `You are a data analyst at Battery smart evaluating performance data across multiple zones for battery swapping platform for e-rickshaws, e-2 wheeler and e-loaders.
 
 Your job:
-1. Summarize the analsis in 2-3 points
+1. Summarize the analysis in 2-3 points
 3. Avoid generic advice like "data is missing" unless a zone has almost no data.
 4. Don’t repeat data back; just analyze and explain.
 5. Write in bullet points under these headings:
@@ -30,41 +29,56 @@ Your output should be formatted clearly. Keep it focused and insightful.`,
       temperature: 0.4,
       topK: 20,
       topP: 0.7,
+      thinkingConfig: {
+        thinkingBudget: 8000,
+        includeThoughts: true,
+      },
     },
   });
 }
 
 async function generateGeminiResponse(messages) {
-  const formattedMessages = messages.map((msg) => ({
-    role: msg.role, // "user" or "model"
-    parts: [{ text: msg.content }],
+  const formatted = messages.map((m) => ({
+    role: m.role,
+    parts: [{ text: m.content }],
   }));
 
   let attempts = 0;
-  let responseText = "Sorry, I couldn't process that right now.";
 
-  // Try all keys in a cyclic manner
   while (attempts < TOTAL_KEYS) {
-    const apiKey = getApiKey(currentKeyIndex);
-    const model = getModel(apiKey);
-
-
+    const model = getModel(getApiKey(currentKeyIndex));
     try {
-      const result = await model.generateContent({ contents: formattedMessages });
-      const text = result.response.text();
+      const res = await model.generateContent({ contents: formatted });
 
-      return text;
+      // 🔍 Log full Gemini response for inspection
+
+      const parts = res?.response?.candidates?.[0]?.content?.parts || [];
+
+      const thoughtPart = parts.find((p) => p.thought);
+      const answerParts = parts.filter((p) => !p.thought);
+
+      const thought = thoughtPart?.text || "";
+      const answer = answerParts.map((p) => p.text).join("\n\n").trim();
+
+      return {
+        thought,
+        answer,
+        raw: res.response, // optional: helpful for debugging/logging
+      };
+
     } catch (err) {
-      console.error(`❌ API key #${currentKeyIndex} failed: ${err.message}`);
-
-      // Move to next key
+      console.error(`❌ Key ${currentKeyIndex} failed: ${err.message}`);
       currentKeyIndex = (currentKeyIndex % TOTAL_KEYS) + 1;
       attempts++;
     }
   }
 
-  console.error("🔴 All Gemini API keys failed.");
-  return responseText;
+  console.error("⚠️ All Gemini API keys failed.");
+  return {
+    thought: "",
+    answer: "⚠️ Battery Bot is down, will be back soon.",
+    raw: null,
+  };
 }
 
 module.exports = { generateGeminiResponse };

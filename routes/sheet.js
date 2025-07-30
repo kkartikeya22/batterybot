@@ -3,7 +3,6 @@ const { google } = require("googleapis");
 const router = express.Router();
 const gcpCredentials = require("../config/gcpCredentials");
 
-console.log('[DEBUG] gcpCredentials:', gcpCredentials);
 
 const auth = new google.auth.GoogleAuth({
   credentials: gcpCredentials,
